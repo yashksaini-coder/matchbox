@@ -578,6 +578,51 @@ matchbox/
 
 ---
 
+## The 4 Critical Questions
+
+### 1. How does your system handle multiple API server instances without double-matching an order?
+
+Every incoming order is pushed (`RPUSH`) into a Redis list `engine:order_queue`. One engine worker — elected via `SET engine:leader NX EX 30` — polls the queue via `LPOP` and processes orders sequentially against an in-memory `OrderBook`. Redis `LPOP` is atomic: only one consumer receives each element. The engine processes orders serially — no concurrent book modifications are possible.
+
+If the leader crashes, its lock expires after 30s. Another instance acquires the lock and becomes the new leader. Orders queue up during failover and are processed once leadership is re-established.
+
+### 2. What data structure did you use for the order book and why?
+
+Two `BTreeMap<u64, VecDeque<Order>>` — one for bids, one for asks.
+
+**BTreeMap** keeps price levels sorted. Best bid via `.keys().next_back()`, best ask via `.keys().next()`. O(log P) insert/lookup.
+
+**VecDeque** enforces time priority. `push_back` for new orders, `pop_front` for matching. Both O(1) amortized.
+
+Alternatives rejected: `BinaryHeap` (no partial fill support), `HashMap` (no sorted order), `Vec` (O(n) front removal).
+
+### 3. What breaks first under real production load?
+
+1. **Single engine worker** — ~3,200 orders/sec ceiling. Fine for prediction markets, bottleneck for HFT.
+2. **Redis latency** — Two round-trips per order submission. Mitigate with pipelining.
+3. **Book loss on crash** — No persistence. Mitigate with PostgreSQL fill log + replay.
+
+### 4. What would you build next?
+
+- PostgreSQL persistence (crash-safe book reconstruction)
+- Order cancellation (`DELETE /orders/:id`)
+- Integration test suite (in-process Axum + testcontainers)
+- Graceful shutdown (drain in-flight orders on SIGTERM)
+- Prometheus `/metrics` endpoint
+
+---
+
+## What's NOT Built (by design)
+
+- Authentication / authorization
+- Order persistence to PostgreSQL
+- Complex order types (market, stop-loss, IOC, FOK)
+- Historical fill data or analytics
+- Rate limiting, circuit breakers, monitoring
+- Docker / Kubernetes deployment configs
+
+---
+
 <div align="center">
 
 [![Yash K. Saini](https://img.shields.io/badge/Portfolio-Visit-blue?style=flat&logo=google-chrome)](https://www.yashksaini.systems/)
