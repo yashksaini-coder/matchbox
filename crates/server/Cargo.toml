@@ -1,0 +1,19 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+engine = { path = "../engine" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+axum = { version = "0.8", features = ["ws"] }
+fred = { version = "10", features = ["i-keys", "i-lists", "i-pubsub", "i-scripts", "subscriber-client", "serde-json"] }
+uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
