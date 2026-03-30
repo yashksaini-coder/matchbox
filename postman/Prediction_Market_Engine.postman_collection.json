@@ -1,0 +1,1213 @@
+{
+	"info": {
+		"_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		"name": "Prediction Market Order Matching Engine",
+		"description": "Complete API collection for the Prediction Market Order Matching Engine.\n\nStack: Rust · Axum · Redis · WebSockets\n\n## Setup\n1. Start Redis: `docker compose up -d`\n2. Start server: `RUST_LOG=info cargo run -p server`\n3. Default base URL: `http://localhost:8080`\n\n## Multi-Instance\nSet `PORT=8081` for a second instance and use the \"Instance B\" folder.",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "base_url",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "base_url_b",
+			"value": "http://localhost:8081",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "Health & Status",
+			"description": "Health check and basic status endpoints.",
+			"item": [
+				{
+					"name": "Health Check",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/health",
+							"host": ["{{base_url}}"],
+							"path": ["health"]
+						},
+						"description": "Liveness probe. Returns 200 if the server is running."
+					},
+					"response": [
+						{
+							"name": "Healthy",
+							"originalRequest": {
+								"method": "GET",
+								"url": {
+									"raw": "{{base_url}}/health",
+									"host": ["{{base_url}}"],
+									"path": ["health"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\"status\":\"ok\"}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 200', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Response has ok status', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData.status).to.eql('ok');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Get Order Book",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/orderbook",
+							"host": ["{{base_url}}"],
+							"path": ["orderbook"]
+						},
+						"description": "Returns the current order book state — bids and asks aggregated by price level.\n\n- `bids`: sorted best (highest price) first\n- `asks`: sorted best (lowest price) first\n- `sequence`: monotonically increasing counter"
+					},
+					"response": [
+						{
+							"name": "Empty Book",
+							"originalRequest": {
+								"method": "GET",
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\"bids\":[],\"asks\":[],\"sequence\":0}"
+						},
+						{
+							"name": "Book with Orders",
+							"originalRequest": {
+								"method": "GET",
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"status": "OK",
+							"code": 200,
+							"body": "{\"bids\":[{\"price\":50,\"qty\":30},{\"price\":48,\"qty\":10}],\"asks\":[{\"price\":52,\"qty\":15},{\"price\":55,\"qty\":20}],\"sequence\":5}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 200', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Response has bids, asks, and sequence', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.have.property('bids');",
+									"    pm.expect(jsonData).to.have.property('asks');",
+									"    pm.expect(jsonData).to.have.property('sequence');",
+									"    pm.expect(jsonData.bids).to.be.an('array');",
+									"    pm.expect(jsonData.asks).to.be.an('array');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Order Submission",
+			"description": "Submit limit orders to the matching engine.",
+			"item": [
+				{
+					"name": "Submit Buy Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"buy\",\n    \"price\": 50,\n    \"qty\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Submit a buy limit order.\n\n- `side`: \"buy\"\n- `price`: integer ticks (u64). e.g., 50 = $0.50 if tick = $0.01\n- `qty`: number of contracts (u64, must be > 0)\n\nReturns a globally unique order ID assigned via Redis INCR."
+					},
+					"response": [
+						{
+							"name": "Order Created",
+							"originalRequest": {
+								"method": "POST",
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"status": "Created",
+							"code": 201,
+							"body": "{\"order_id\":1}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 201', function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test('Response has order_id', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.have.property('order_id');",
+									"    pm.expect(jsonData.order_id).to.be.a('number');",
+									"    pm.expect(jsonData.order_id).to.be.above(0);",
+									"});",
+									"",
+									"// Save order_id for later use",
+									"var jsonData = pm.response.json();",
+									"pm.collectionVariables.set('last_buy_order_id', jsonData.order_id);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Submit Sell Order",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"sell\",\n    \"price\": 50,\n    \"qty\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Submit a sell limit order.\n\n- `side`: \"sell\"\n- `price`: integer ticks (u64)\n- `qty`: number of contracts (u64, must be > 0)"
+					},
+					"response": [
+						{
+							"name": "Order Created",
+							"originalRequest": {
+								"method": "POST",
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"status": "Created",
+							"code": 201,
+							"body": "{\"order_id\":2}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 201', function () {",
+									"    pm.response.to.have.status(201);",
+									"});",
+									"",
+									"pm.test('Response has order_id', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.have.property('order_id');",
+									"    pm.expect(jsonData.order_id).to.be.a('number');",
+									"});",
+									"",
+									"var jsonData = pm.response.json();",
+									"pm.collectionVariables.set('last_sell_order_id', jsonData.order_id);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Validation & Error Cases",
+			"description": "Test input validation and error handling.",
+			"item": [
+				{
+					"name": "Reject Zero Quantity",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"buy\",\n    \"price\": 50,\n    \"qty\": 0\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Submitting qty=0 should return 400 Bad Request."
+					},
+					"response": [
+						{
+							"name": "Validation Error",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\"error\":\"qty must be > 0\"}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 400', function () {",
+									"    pm.response.to.have.status(400);",
+									"});",
+									"",
+									"pm.test('Error message mentions qty', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.have.property('error');",
+									"    pm.expect(jsonData.error).to.include('qty');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Reject Zero Price",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"sell\",\n    \"price\": 0,\n    \"qty\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Submitting price=0 should return 400 Bad Request."
+					},
+					"response": [
+						{
+							"name": "Validation Error",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\"error\":\"price must be > 0\"}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 400', function () {",
+									"    pm.response.to.have.status(400);",
+									"});",
+									"",
+									"pm.test('Error message mentions price', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.have.property('error');",
+									"    pm.expect(jsonData.error).to.include('price');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Reject Invalid JSON",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{ invalid json }"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Sending malformed JSON should return 4xx."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 4xx', function () {",
+									"    pm.expect(pm.response.code).to.be.within(400, 499);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Reject Missing Fields",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"buy\"\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Sending a request with missing required fields (price, qty) should return 4xx."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 4xx', function () {",
+									"    pm.expect(pm.response.code).to.be.within(400, 499);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Reject Invalid Side",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"hold\",\n    \"price\": 50,\n    \"qty\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Sending an invalid side value should return 4xx. Valid values are \"buy\" and \"sell\"."
+					},
+					"response": [],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 4xx', function () {",
+									"    pm.expect(pm.response.code).to.be.within(400, 499);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Matching Scenarios",
+			"description": "End-to-end matching scenarios. Run these in order.\n\nNote: These assume a fresh order book. Flush Redis before running:\n`docker exec <redis-container> redis-cli FLUSHALL`",
+			"item": [
+				{
+					"name": "Scenario 1: Full Match",
+					"description": "Two orders at the same price and qty — both fully consumed.",
+					"item": [
+						{
+							"name": "1a. Submit Sell 10@100",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"sell\",\n    \"price\": 100,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Order created', function () {",
+											"    pm.response.to.have.status(201);",
+											"    pm.collectionVariables.set('scenario1_sell_id', pm.response.json().order_id);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "1b. Verify Sell Resting",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"event": [
+								{
+									"listen": "prerequest",
+									"script": {
+										"exec": [
+											"// Wait for engine to process",
+											"setTimeout(function(){}, 500);"
+										],
+										"type": "text/javascript"
+									}
+								},
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Sell resting on asks', function () {",
+											"    var book = pm.response.json();",
+											"    pm.expect(book.asks.length).to.be.above(0);",
+											"    pm.expect(book.asks[0].price).to.eql(100);",
+											"    pm.expect(book.asks[0].qty).to.eql(10);",
+											"    pm.expect(book.bids.length).to.eql(0);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "1c. Submit Buy 10@100 (crosses)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"buy\",\n    \"price\": 100,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Order created', function () {",
+											"    pm.response.to.have.status(201);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "1d. Verify Book Empty (full match)",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"event": [
+								{
+									"listen": "prerequest",
+									"script": {
+										"exec": [
+											"setTimeout(function(){}, 500);"
+										],
+										"type": "text/javascript"
+									}
+								},
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Book is empty after full match', function () {",
+											"    var book = pm.response.json();",
+											"    pm.expect(book.bids.length).to.eql(0);",
+											"    pm.expect(book.asks.length).to.eql(0);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Scenario 2: Partial Fill",
+					"description": "Buy order larger than resting sell — remainder rests on bids.",
+					"item": [
+						{
+							"name": "2a. Submit Sell 30@100",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"sell\",\n    \"price\": 100,\n    \"qty\": 30\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Order created', function () {",
+											"    pm.response.to.have.status(201);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "2b. Submit Buy 50@100 (partial fill)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"buy\",\n    \"price\": 100,\n    \"qty\": 50\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Order created', function () {",
+											"    pm.response.to.have.status(201);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "2c. Verify Remaining 20 on Bids",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"event": [
+								{
+									"listen": "prerequest",
+									"script": {
+										"exec": [
+											"setTimeout(function(){}, 500);"
+										],
+										"type": "text/javascript"
+									}
+								},
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Remaining 20 rests on bids', function () {",
+											"    var book = pm.response.json();",
+											"    pm.expect(book.asks.length).to.eql(0);",
+											"    pm.expect(book.bids.length).to.eql(1);",
+											"    pm.expect(book.bids[0].price).to.eql(100);",
+											"    pm.expect(book.bids[0].qty).to.eql(20);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Scenario 3: Price Priority",
+					"description": "Multiple asks at different prices — lowest ask fills first.",
+					"item": [
+						{
+							"name": "3a. Submit Sell 10@490",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"sell\",\n    \"price\": 490,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Created', function () { pm.response.to.have.status(201); });"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "3b. Submit Sell 10@500",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"sell\",\n    \"price\": 500,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Created', function () { pm.response.to.have.status(201); });"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "3c. Submit Sell 10@510",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"sell\",\n    \"price\": 510,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Created', function () { pm.response.to.have.status(201); });"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "3d. Submit Buy 25@510 (sweeps 3 levels)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"buy\",\n    \"price\": 510,\n    \"qty\": 25\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Created', function () { pm.response.to.have.status(201); });"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "3e. Verify Remaining 5@510 on Asks",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"event": [
+								{
+									"listen": "prerequest",
+									"script": {
+										"exec": [
+											"setTimeout(function(){}, 500);"
+										],
+										"type": "text/javascript"
+									}
+								},
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Only 5@510 remains on asks', function () {",
+											"    var book = pm.response.json();",
+											"    pm.expect(book.bids.length).to.eql(0);",
+											"    pm.expect(book.asks.length).to.eql(1);",
+											"    pm.expect(book.asks[0].price).to.eql(510);",
+											"    pm.expect(book.asks[0].qty).to.eql(5);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						}
+					]
+				},
+				{
+					"name": "Scenario 4: No Match (spread)",
+					"description": "Buy below ask — both orders rest on the book with a spread.",
+					"item": [
+						{
+							"name": "4a. Submit Sell 10@60",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"sell\",\n    \"price\": 60,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Created', function () { pm.response.to.have.status(201); });"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "4b. Submit Buy 10@40 (no match)",
+							"request": {
+								"method": "POST",
+								"header": [
+									{
+										"key": "Content-Type",
+										"value": "application/json"
+									}
+								],
+								"body": {
+									"mode": "raw",
+									"raw": "{\n    \"side\": \"buy\",\n    \"price\": 40,\n    \"qty\": 10\n}"
+								},
+								"url": {
+									"raw": "{{base_url}}/orders",
+									"host": ["{{base_url}}"],
+									"path": ["orders"]
+								}
+							},
+							"event": [
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Created', function () { pm.response.to.have.status(201); });"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						},
+						{
+							"name": "4c. Verify Both Resting (spread)",
+							"request": {
+								"method": "GET",
+								"header": [],
+								"url": {
+									"raw": "{{base_url}}/orderbook",
+									"host": ["{{base_url}}"],
+									"path": ["orderbook"]
+								}
+							},
+							"event": [
+								{
+									"listen": "prerequest",
+									"script": {
+										"exec": [
+											"setTimeout(function(){}, 500);"
+										],
+										"type": "text/javascript"
+									}
+								},
+								{
+									"listen": "test",
+									"script": {
+										"exec": [
+											"pm.test('Both orders resting with spread', function () {",
+											"    var book = pm.response.json();",
+											"    pm.expect(book.bids.length).to.be.above(0);",
+											"    pm.expect(book.asks.length).to.be.above(0);",
+											"    // Best bid (40) < best ask (60) — no crossing",
+											"    pm.expect(book.bids[0].price).to.be.below(book.asks[0].price);",
+											"});"
+										],
+										"type": "text/javascript"
+									}
+								}
+							]
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "Multi-Instance (Instance B)",
+			"description": "Requests targeting the second server instance (port 8081).\n\nStart a second instance:\n`PORT=8081 RUST_LOG=info cargo run -p server`",
+			"item": [
+				{
+					"name": "Health Check (Instance B)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url_b}}/health",
+							"host": ["{{base_url_b}}"],
+							"path": ["health"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Instance B is healthy', function () {",
+									"    pm.response.to.have.status(200);",
+									"    pm.expect(pm.response.json().status).to.eql('ok');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Submit Sell to Instance B",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"sell\",\n    \"price\": 75,\n    \"qty\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url_b}}/orders",
+							"host": ["{{base_url_b}}"],
+							"path": ["orders"]
+						},
+						"description": "Submit a sell order to instance B. The order flows through the same Redis queue and is processed by the engine leader (which may be instance A)."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Created on instance B', function () {",
+									"    pm.response.to.have.status(201);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Submit Buy to Instance A (cross-instance match)",
+					"request": {
+						"method": "POST",
+						"header": [
+							{
+								"key": "Content-Type",
+								"value": "application/json"
+							}
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n    \"side\": \"buy\",\n    \"price\": 75,\n    \"qty\": 10\n}"
+						},
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Submit a matching buy order to instance A. This should match the sell from instance B — proving cross-instance matching works."
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Created on instance A', function () {",
+									"    pm.response.to.have.status(201);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Verify Book Empty (Instance A)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/orderbook",
+							"host": ["{{base_url}}"],
+							"path": ["orderbook"]
+						}
+					},
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"setTimeout(function(){}, 1000);"
+								],
+								"type": "text/javascript"
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Cross-instance match: book empty on A', function () {",
+									"    var book = pm.response.json();",
+									"    pm.expect(book.bids.length).to.eql(0);",
+									"    pm.expect(book.asks.length).to.eql(0);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Verify Book Empty (Instance B)",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url_b}}/orderbook",
+							"host": ["{{base_url_b}}"],
+							"path": ["orderbook"]
+						}
+					},
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Cross-instance match: book empty on B', function () {",
+									"    var book = pm.response.json();",
+									"    pm.expect(book.bids.length).to.eql(0);",
+									"    pm.expect(book.asks.length).to.eql(0);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				}
+			]
+		},
+		{
+			"name": "WebSocket",
+			"description": "WebSocket endpoint documentation.\n\nPostman supports WebSocket requests natively (New > WebSocket Request).\n\n## How to test:\n1. Create a new WebSocket Request in Postman\n2. URL: `ws://localhost:8080/ws`\n3. Click Connect\n4. Submit crossing orders via the HTTP requests above\n5. Fill events appear as incoming messages\n\n## Fill message format:\n```json\n{\n  \"maker_order_id\": 1,\n  \"taker_order_id\": 2,\n  \"price\": 50,\n  \"qty\": 10,\n  \"timestamp\": 1711814400000000000\n}\n```",
+			"item": [
+				{
+					"name": "WebSocket Connect Info",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/ws",
+							"host": ["{{base_url}}"],
+							"path": ["ws"]
+						},
+						"description": "This is a WebSocket endpoint. Use Postman's WebSocket client:\n\n1. New > WebSocket Request\n2. URL: ws://localhost:8080/ws\n3. Click Connect\n4. Submit orders via POST /orders — fills appear here\n\nNote: A plain GET request will return 'connection upgrade required' since this is a WebSocket endpoint."
+					},
+					"response": []
+				}
+			]
+		}
+	]
+}
