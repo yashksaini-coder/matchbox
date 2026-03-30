@@ -269,6 +269,39 @@ curl -s -X POST http://localhost:8080/orders \
 
 **Errors:** `400` (qty=0, price=0) · `422` (invalid JSON/side) · `500` (Redis error)
 
+### GET /orders
+
+List all submitted orders.
+
+```bash
+curl -s http://localhost:8080/orders
+```
+
+**Response** (`200 OK`):
+
+```json
+[
+  { "id": 1, "side": "sell", "price": 50, "qty": 10, "timestamp": 1774902907276745182 },
+  { "id": 2, "side": "buy", "price": 50, "qty": 5, "timestamp": 1774902907283205406 }
+]
+```
+
+### GET /orders/:id
+
+Get a single order by ID.
+
+```bash
+curl -s http://localhost:8080/orders/1
+```
+
+**Response** (`200 OK`):
+
+```json
+{ "id": 1, "side": "sell", "price": 50, "qty": 10, "timestamp": 1774902907276745182 }
+```
+
+**Errors:** `400` (order not found)
+
 ### GET /orderbook
 
 Return the current order book state.

@@ -20,8 +20,111 @@
 	"item": [
 		{
 			"name": "Health & Status",
-			"description": "Health check and basic status endpoints.",
+			"description": "Health check, order listing, and status endpoints.",
 			"item": [
+				{
+					"name": "List All Orders",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/orders",
+							"host": ["{{base_url}}"],
+							"path": ["orders"]
+						},
+						"description": "Returns all submitted orders with their id, side, price, qty, and timestamp."
+					},
+					"response": [
+						{
+							"name": "Orders List",
+							"status": "OK",
+							"code": 200,
+							"body": "[{\"id\":1,\"side\":\"sell\",\"price\":50,\"qty\":10,\"timestamp\":1774902907276745182},{\"id\":2,\"side\":\"buy\",\"price\":50,\"qty\":5,\"timestamp\":1774902907283205406}]"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 200', function () {",
+									"    pm.response.to.have.status(200);",
+									"});",
+									"",
+									"pm.test('Response is an array', function () {",
+									"    var jsonData = pm.response.json();",
+									"    pm.expect(jsonData).to.be.an('array');",
+									"});",
+									"",
+									"pm.test('Each order has required fields', function () {",
+									"    var jsonData = pm.response.json();",
+									"    if (jsonData.length > 0) {",
+									"        var order = jsonData[0];",
+									"        pm.expect(order).to.have.property('id');",
+									"        pm.expect(order).to.have.property('side');",
+									"        pm.expect(order).to.have.property('price');",
+									"        pm.expect(order).to.have.property('qty');",
+									"        pm.expect(order).to.have.property('timestamp');",
+									"    }",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
+				{
+					"name": "Get Order by ID",
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{base_url}}/orders/1",
+							"host": ["{{base_url}}"],
+							"path": ["orders", "1"]
+						},
+						"description": "Returns a single order by its ID with full details: id, side (buy/sell), price, qty, and timestamp."
+					},
+					"response": [
+						{
+							"name": "Order Found",
+							"status": "OK",
+							"code": 200,
+							"body": "{\"id\":1,\"side\":\"sell\",\"price\":50,\"qty\":10,\"timestamp\":1774902907276745182}"
+						},
+						{
+							"name": "Order Not Found",
+							"status": "Bad Request",
+							"code": 400,
+							"body": "{\"error\":\"order 999 not found\"}"
+						}
+					],
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status code is 200 or 400', function () {",
+									"    pm.expect(pm.response.code).to.be.oneOf([200, 400]);",
+									"});",
+									"",
+									"if (pm.response.code === 200) {",
+									"    pm.test('Order has required fields', function () {",
+									"        var order = pm.response.json();",
+									"        pm.expect(order).to.have.property('id');",
+									"        pm.expect(order).to.have.property('side');",
+									"        pm.expect(order).to.have.property('price');",
+									"        pm.expect(order).to.have.property('qty');",
+									"        pm.expect(order).to.have.property('timestamp');",
+									"        pm.expect(order.side).to.be.oneOf(['buy', 'sell']);",
+									"    });",
+									"}"
+								],
+								"type": "text/javascript"
+							}
+						}
+					]
+				},
 				{
 					"name": "Health Check",
 					"request": {

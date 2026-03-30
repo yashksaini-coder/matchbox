@@ -10,7 +10,8 @@ use crate::state::AppState;
 pub fn app_router() -> Router<AppState> {
     Router::new()
         .route("/health", get(health))
-        .route("/orders", post(orders::post_order))
+        .route("/orders", post(orders::post_order).get(orders::list_orders))
+        .route("/orders/{id}", get(orders::get_order))
         .route("/orderbook", get(orders::get_orderbook))
         .route("/ws", get(ws::ws_handler))
 }
