@@ -1,4 +1,4 @@
-# Prediction Market Order Matching Engine
+# Matchbox
 
 A toy (but architecturally honest) order matching engine for a prediction market, built in Rust. Designed to demonstrate correctness, clean architecture, and understanding of distributed systems — not feature completeness.
 
@@ -501,7 +501,7 @@ cargo fmt --all
 ## Project Structure
 
 ```
-prediction-market-engine/
+matchbox/
 ├── Cargo.toml                 # Workspace definition + shared dependencies
 ├── Cargo.lock
 ├── README.md

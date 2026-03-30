@@ -1,8 +1,8 @@
 {
 	"info": {
 		"_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-		"name": "Prediction Market Order Matching Engine",
-		"description": "Complete API collection for the Prediction Market Order Matching Engine.\n\nStack: Rust · Axum · Redis · WebSockets\n\n## Setup\n1. Start Redis: `docker compose up -d`\n2. Start server: `RUST_LOG=info cargo run -p server`\n3. Default base URL: `http://localhost:8080`\n\n## Multi-Instance\nSet `PORT=8081` for a second instance and use the \"Instance B\" folder.",
+		"name": "Matchbox",
+		"description": "Complete API collection for Matchbox — Prediction Market Order Matching Engine.\n\nStack: Rust · Axum · Redis · WebSockets\n\n## Setup\n1. Start Redis: `docker compose up -d`\n2. Start server: `RUST_LOG=info cargo run -p server`\n3. Default base URL: `http://localhost:8080`\n\n## Multi-Instance\nSet `PORT=8081` for a second instance and use the \"Instance B\" folder.",
 		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"variable": [
