@@ -1,0 +1,26 @@
+[book]
+title = "Matchbox"
+description = "Prediction market order matching engine built in Rust"
+authors = ["Eterna Labs"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "../target/book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/eterna-labs/matchbox"
+edit-url-template = "https://github.com/eterna-labs/matchbox/edit/main/book/src/{path}"
+site-url = "/matchbox/"
+no-section-label = false
+
+[output.html.fold]
+enable = true
+level = 1
+
+[output.html.search]
+enable = true
+limit-results = 20
+boost-hierarchy = 2
