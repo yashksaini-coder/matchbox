@@ -8,27 +8,142 @@ A toy (but architecturally honest) order matching engine for a prediction market
 
 ## Architecture
 
-```
-   Browser/CLI  <── HTTP/WS ──>  API Server A  <── HTTP/WS ──>  ...
-                                     │
-                                     │ RPUSH order (JSON)
-                                     v
-  ┌─────────────────────────────── REDIS ───────────────────────────────┐
-  │  engine:order_queue (List)          fills:events (Pub/Sub Channel)  │
-  │  engine:order_id_counter (INCR)     orderbook:snapshot (String)     │
-  │  engine:leader (SETNX, TTL=30s)                                    │
-  └────────────┬──────────────────────────────────────┬────────────────┘
-               │ LPOP                                 │ SUBSCRIBE
-               v                                      v
-        ENGINE WORKER                        ALL API SERVER INSTANCES
-     (single leader task)                (subscribe, broadcast to local WS)
-     - Owns OrderBook in memory          - tokio::sync::broadcast<Fill>
-     - Sequential match_order()          - Each WS connection subscribes
-     - Publishes fills to Pub/Sub        - Fan-out to connected clients
-     - Updates snapshot in Redis
+### System Overview
+
+```mermaid
+graph TB
+    subgraph Clients["Clients"]
+        C1["Browser / CLI"]
+        C2["WebSocket Client"]
+    end
+
+    subgraph API["API Server Instances"]
+        A1["Server A · :8080"]
+        A2["Server B · :8081"]
+        A3["Server N · :808N"]
+    end
+
+    subgraph Redis["Redis — Coordination Layer"]
+        Q["engine:order_queue<br/>List — FIFO Order Queue"]
+        ID["engine:order_id_counter<br/>String — Atomic INCR"]
+        LOCK["engine:leader<br/>String — SETNX · TTL 30s"]
+        SNAP["orderbook:snapshot<br/>String — JSON Snapshot"]
+        PS["fills:events<br/>Pub/Sub — Fill Broadcast"]
+    end
+
+    subgraph Engine["Engine Worker — Single Leader"]
+        EW["engine_worker_loop<br/>· Owns OrderBook in memory<br/>· Sequential match_order"]
+    end
+
+    C1 -- "POST /orders" --> A1
+    C1 -- "POST /orders" --> A2
+    C1 -- "GET /orderbook" --> A3
+
+    A1 -- "INCR" --> ID
+    A1 -- "RPUSH order" --> Q
+    A2 -- "RPUSH order" --> Q
+
+    Q -- "LPOP" --> EW
+    LOCK -. "SET NX EX 30" .-> EW
+    EW -- "PUBLISH fill" --> PS
+    EW -- "SET snapshot" --> SNAP
+
+    PS -- "SUBSCRIBE" --> A1
+    PS -- "SUBSCRIBE" --> A2
+    PS -- "SUBSCRIBE" --> A3
+
+    A1 -- "WS fill" --> C2
+    A2 -- "WS fill" --> C2
+
+    SNAP -- "GET" --> A3
+
+    style Redis fill:#dc382c,color:#fff,stroke:#b71c1c
+    style Engine fill:#1565c0,color:#fff,stroke:#0d47a1
+    style API fill:#2e7d32,color:#fff,stroke:#1b5e20
+    style Clients fill:#f57f17,color:#fff,stroke:#e65100
 ```
 
-**Key insight**: All API servers push orders to a shared Redis list. A single engine worker — elected via Redis distributed lock (`SETNX`) — consumes orders sequentially from the queue. This eliminates double-matching without complex distributed consensus. Redis acts as both the coordination layer and the message bus.
+### Order Lifecycle
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as API Server
+    participant R as Redis
+    participant E as Engine Worker
+    participant W as WebSocket Clients
+
+    C->>A: POST /orders {side, price, qty}
+    A->>R: INCR engine:order_id_counter
+    R-->>A: order_id = 42
+    A->>R: RPUSH engine:order_queue
+    A-->>C: 201 Created {order_id: 42}
+
+    Note over E: Polling queue via LPOP
+
+    R->>E: LPOP returns Order JSON
+    E->>E: match_order(order, book)
+    E->>R: PUBLISH fills:events
+    E->>R: SET orderbook:snapshot
+
+    R->>A: SUBSCRIBE message
+    A->>A: broadcast::send(fill)
+    A->>W: WebSocket Text(fill JSON)
+```
+
+### Leader Election and Failover
+
+```mermaid
+stateDiagram-v2
+    [*] --> TryAcquire: Instance starts
+
+    TryAcquire --> Leader: SET NX succeeds
+    TryAcquire --> Follower: SET NX fails
+
+    Leader --> Leader: Refresh lock every 10s
+    Leader --> Processing: LPOP returns order
+    Processing --> Leader: match then publish
+
+    Leader --> [*]: Crash or shutdown
+
+    Follower --> Follower: Retry every 5s
+    Follower --> TryAcquire: Lock expired after 30s
+```
+
+### Matching Engine — Price-Time Priority
+
+```mermaid
+flowchart LR
+    subgraph Input
+        O["Incoming Order<br/>Buy 25 @ 510"]
+    end
+
+    subgraph Book["Order Book — asks side"]
+        L1["490: Sell qty=10"]
+        L2["500: Sell qty=10"]
+        L3["510: Sell qty=10"]
+    end
+
+    subgraph Output["Generated Fills"]
+        F1["Fill price=490 qty=10"]
+        F2["Fill price=500 qty=10"]
+        F3["Fill price=510 qty=5"]
+    end
+
+    O --> L1
+    L1 --> F1
+    O --> L2
+    L2 --> F2
+    O --> L3
+    L3 --> F3
+
+    F3 -. "5 remaining" .-> L3
+
+    style Input fill:#1565c0,color:#fff
+    style Output fill:#2e7d32,color:#fff
+```
+
+> **Key insight**: All API servers push orders to a shared Redis list. A single engine worker — elected via distributed lock (`SETNX`) — consumes orders sequentially. This eliminates double-matching without distributed consensus.
 
 ### How the Flow Works
 
@@ -49,7 +164,7 @@ A toy (but architecturally honest) order matching engine for a prediction market
 
 - **Rust** (stable, 2021 edition) — [install via rustup](https://rustup.rs/)
 - **Redis 7+** — either locally installed or via Docker
-- **Docker & Docker Compose** (optional) — for containerized Redis or full-stack setup
+- **Docker & Docker Compose** (optional) — for containerized Redis
 - **websocat** (optional) — for testing WebSocket feeds (`cargo install websocat`)
 - **curl** — for testing HTTP endpoints
 
@@ -59,31 +174,27 @@ A toy (but architecturally honest) order matching engine for a prediction market
 
 ### Option A: Manual Setup
 
-Use this when you want to run the Rust server directly on your machine with a separate Redis instance.
-
 **Step 1: Install and start Redis**
 
 ```bash
-# macOS (Homebrew)
-brew install redis
-redis-server
+# macOS
+brew install redis && redis-server
 
 # Arch Linux
-sudo pacman -S redis
-sudo systemctl start redis
+sudo pacman -S redis && sudo systemctl start redis
 
 # Ubuntu/Debian
-sudo apt install redis-server
-sudo systemctl start redis
+sudo apt install redis-server && sudo systemctl start redis
 
-# Or just use Docker for Redis only:
+# Or use Docker for Redis only
 docker run -d --name redis -p 6379:6379 redis:7-alpine
 ```
 
-**Step 2: Build the project**
+**Step 2: Clone and build**
 
 ```bash
-git clone <repo-url> && cd prediction-market-engine
+git clone https://github.com/yashksaini-coder/matchbox.git
+cd matchbox
 cargo build --workspace
 ```
 
@@ -96,43 +207,29 @@ cargo test --workspace
 **Step 4: Start the server**
 
 ```bash
-# Default: connects to redis://127.0.0.1:6379, listens on port 8080
 RUST_LOG=info cargo run -p server
 ```
 
-**Step 5: Verify it's running**
+**Step 5: Verify**
 
 ```bash
 curl http://localhost:8080/health
 # {"status":"ok"}
 ```
 
-### Option B: Docker Compose (Full Stack)
-
-Use this for zero-install setup. Docker Compose runs Redis for you.
-
-**Step 1: Start Redis**
+### Option B: Docker Compose
 
 ```bash
+# Start Redis
 docker compose up -d
-```
 
-**Step 2: Build and run the server**
+# Run the server
+RUST_LOG=info cargo run -p server
 
-```bash
-REDIS_URL=redis://localhost:6379 RUST_LOG=info cargo run -p server
-```
-
-**Step 3: Verify**
-
-```bash
+# Verify
 curl http://localhost:8080/health
-# {"status":"ok"}
-```
 
-**Teardown:**
-
-```bash
+# Teardown
 docker compose down
 ```
 
@@ -142,7 +239,7 @@ docker compose down
 |----------|---------|-------------|
 | `REDIS_URL` | `redis://127.0.0.1:6379` | Redis connection URL |
 | `PORT` | `8080` | HTTP server listen port |
-| `RUST_LOG` | _(none)_ | Log level filter (e.g., `info`, `debug`, `server=debug`) |
+| `RUST_LOG` | _(none)_ | Log level filter (e.g., `info`, `debug`) |
 
 ---
 
@@ -150,64 +247,60 @@ docker compose down
 
 ### POST /orders
 
-Submit a new limit order to the matching engine.
+Submit a new limit order.
 
-**Request:**
-```json
-{
-  "side": "buy" | "sell",
-  "price": 50,
-  "qty": 10
-}
+```bash
+curl -s -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"side":"buy","price":50,"qty":10}'
 ```
 
-- `side` — `"buy"` or `"sell"`
-- `price` — integer ticks (u64). e.g., 50 = $0.50 if tick = $0.01
-- `qty` — number of contracts (u64, must be > 0)
+| Field | Type | Description |
+|-------|------|-------------|
+| `side` | string | `"buy"` or `"sell"` |
+| `price` | u64 | Integer ticks (e.g., 50 = $0.50 if tick = $0.01) |
+| `qty` | u64 | Number of contracts (must be > 0) |
 
 **Response** (`201 Created`):
+
 ```json
-{
-  "order_id": 1
-}
+{ "order_id": 1 }
 ```
 
-**Errors:**
-- `400` — validation error (qty=0, price=0)
-- `500` — Redis connection error
-
----
+**Errors:** `400` (qty=0, price=0) · `422` (invalid JSON/side) · `500` (Redis error)
 
 ### GET /orderbook
 
-Returns the current order book state (bids and asks aggregated by price level).
+Return the current order book state.
+
+```bash
+curl -s http://localhost:8080/orderbook
+```
 
 **Response** (`200 OK`):
+
 ```json
 {
-  "bids": [
-    { "price": 50, "qty": 30 },
-    { "price": 48, "qty": 10 }
-  ],
-  "asks": [
-    { "price": 52, "qty": 15 },
-    { "price": 55, "qty": 20 }
-  ],
+  "bids": [{ "price": 50, "qty": 30 }],
+  "asks": [{ "price": 52, "qty": 15 }],
   "sequence": 42
 }
 ```
 
-- `bids` — sorted best (highest price) first
-- `asks` — sorted best (lowest price) first
-- `sequence` — monotonically increasing counter; increments on every order processed
-
----
+- `bids` — sorted highest price first
+- `asks` — sorted lowest price first
+- `sequence` — increments on every order processed
 
 ### GET /ws
 
-WebSocket endpoint. After connecting, the client receives fill events as JSON messages in real time.
+WebSocket endpoint. Receives fill events in real time.
 
-**Fill message format:**
+```bash
+websocat ws://localhost:8080/ws
+```
+
+**Fill message:**
+
 ```json
 {
   "maker_order_id": 1,
@@ -218,96 +311,55 @@ WebSocket endpoint. After connecting, the client receives fill events as JSON me
 }
 ```
 
-- `maker_order_id` — the resting order that was already in the book
-- `taker_order_id` — the incoming order that triggered the match
-- `price` — fill price (always the maker's price, per price-time priority)
-- `qty` — number of contracts filled
-- `timestamp` — Unix nanoseconds when the fill occurred
-
----
-
 ### GET /health
 
-Liveness probe.
-
-**Response** (`200 OK`):
-```json
-{
-  "status": "ok"
-}
+```bash
+curl -s http://localhost:8080/health
+# {"status":"ok"}
 ```
 
 ---
 
 ## Usage Examples
 
-### Submitting Orders
+### Basic Matching
 
 ```bash
-# Place a sell order: 10 contracts at price 50
+# Sell 10 at price 50
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"side":"sell","price":50,"qty":10}'
 # {"order_id":1}
 
-# Place a matching buy order: 10 contracts at price 50
+# Buy 10 at price 50 — matches the sell
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"side":"buy","price":50,"qty":10}'
 # {"order_id":2}
-```
 
-### Querying the Order Book
-
-```bash
-# After the sell rests (before the buy arrives):
-curl -s http://localhost:8080/orderbook
-# {"bids":[],"asks":[{"price":50,"qty":10}],"sequence":1}
-
-# After the buy matches the sell (book is empty):
+# Book is empty after full match
 curl -s http://localhost:8080/orderbook
 # {"bids":[],"asks":[],"sequence":2}
 ```
 
-### Real-Time WebSocket Feed
+### Partial Fill
 
 ```bash
-# Terminal 1: Connect to WebSocket feed
-websocat ws://localhost:8080/ws
-
-# Terminal 2: Submit crossing orders
-curl -s -X POST http://localhost:8080/orders \
-  -H "Content-Type: application/json" \
-  -d '{"side":"sell","price":60,"qty":5}'
-
-curl -s -X POST http://localhost:8080/orders \
-  -H "Content-Type: application/json" \
-  -d '{"side":"buy","price":60,"qty":5}'
-
-# Terminal 1 receives:
-# {"maker_order_id":1,"taker_order_id":2,"price":60,"qty":5,"timestamp":...}
-```
-
-### Partial Fill Example
-
-```bash
-# Sell 30 at price 100
+# Sell 30, then buy 50 — only 30 available
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"side":"sell","price":100,"qty":30}'
 
-# Buy 50 at price 100 — only 30 available, remaining 20 rests as a bid
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"side":"buy","price":100,"qty":50}'
 
 curl -s http://localhost:8080/orderbook
 # {"bids":[{"price":100,"qty":20}],"asks":[],"sequence":2}
-# Fill generated: qty=30 (partial fill of the buy order)
-# Remaining 20 from the buy rests on the bids side
+# Fill: qty=30. Remaining 20 rests on bids.
 ```
 
-### Price Priority Example
+### Price Priority
 
 ```bash
 # Three sells at different prices
@@ -318,44 +370,51 @@ curl -s -X POST http://localhost:8080/orders \
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" -d '{"side":"sell","price":510,"qty":10}'
 
-# Buy 25 at price 510
+# Buy 25 at 510 — fills at 490, 500, then 510 (price priority)
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" -d '{"side":"buy","price":510,"qty":25}'
 
-# Three fills generated:
-#   fill 1: price=490, qty=10 (lowest ask consumed first)
-#   fill 2: price=500, qty=10 (next lowest)
-#   fill 3: price=510, qty=5  (partially consumes the 510 ask)
-#
-# Note: buyer submitted at 510 but got filled at 490 and 500 too.
-# The fill price is always the MAKER's price — not the taker's.
-
 curl -s http://localhost:8080/orderbook
 # {"bids":[],"asks":[{"price":510,"qty":5}],"sequence":4}
+```
+
+### WebSocket Feed
+
+```bash
+# Terminal 1: Connect WebSocket
+websocat ws://localhost:8080/ws
+
+# Terminal 2: Submit crossing orders
+curl -s -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"side":"sell","price":60,"qty":5}'
+curl -s -X POST http://localhost:8080/orders \
+  -H "Content-Type: application/json" \
+  -d '{"side":"buy","price":60,"qty":5}'
+
+# Terminal 1 receives the fill JSON in real time
 ```
 
 ---
 
 ## Multi-Instance Mode
 
-The system is designed to support N API server instances simultaneously, all sharing the same Redis backend. Only one instance becomes the engine leader; the others serve HTTP/WS and relay fills.
+Supports N API server instances sharing one Redis backend. One instance becomes the engine leader; others serve HTTP/WS and relay fills.
 
-### Manual Multi-Instance
+### Running Two Instances
 
 ```bash
-# Terminal 1: Start instance A (will likely become leader)
+# Terminal 1: Instance A (becomes leader)
 PORT=8080 RUST_LOG=info cargo run -p server
 
-# Terminal 2: Start instance B (becomes a follower)
+# Terminal 2: Instance B (follower)
 PORT=8081 RUST_LOG=info cargo run -p server
+```
 
-# Terminal 3: Connect WebSocket to instance A
-websocat ws://localhost:8080/ws
+### Cross-Instance Matching
 
-# Terminal 4: Connect WebSocket to instance B
-websocat ws://localhost:8081/ws
-
-# Terminal 5: Submit orders to different instances
+```bash
+# Sell on Instance A, buy on Instance B
 curl -s -X POST http://localhost:8080/orders \
   -H "Content-Type: application/json" \
   -d '{"side":"sell","price":50,"qty":10}'
@@ -364,110 +423,57 @@ curl -s -X POST http://localhost:8081/orders \
   -H "Content-Type: application/json" \
   -d '{"side":"buy","price":50,"qty":10}'
 
-# Both WebSocket clients (Terminal 3 & 4) receive the fill event.
-# Both instances return empty orderbook:
+# Both instances show empty book
 curl -s http://localhost:8080/orderbook  # {"bids":[],"asks":[],"sequence":2}
 curl -s http://localhost:8081/orderbook  # {"bids":[],"asks":[],"sequence":2}
 ```
 
-### Docker Multi-Instance
+### Leader Failover
 
-```bash
-# Start Redis
-docker compose up -d
+1. Kill the leader instance (Ctrl+C)
+2. Wait ~30 seconds (lock TTL expires)
+3. The surviving instance logs `Became engine leader`
+4. Submit new orders — processed by the new leader
 
-# Run two server instances in separate terminals (or background them)
-REDIS_URL=redis://localhost:6379 PORT=8080 RUST_LOG=info cargo run -p server &
-REDIS_URL=redis://localhost:6379 PORT=8081 RUST_LOG=info cargo run -p server &
-
-# Verify both are up
-curl -s http://localhost:8080/health  # {"status":"ok"}
-curl -s http://localhost:8081/health  # {"status":"ok"}
-
-# Check which instance is the leader
-docker exec $(docker compose ps -q redis) redis-cli GET engine:leader
-# Returns the UUID of the leader instance
-
-# Submit crossing orders across instances
-curl -s -X POST http://localhost:8080/orders \
-  -H "Content-Type: application/json" \
-  -d '{"side":"sell","price":75,"qty":10}'
-
-curl -s -X POST http://localhost:8081/orders \
-  -H "Content-Type: application/json" \
-  -d '{"side":"buy","price":75,"qty":10}'
-
-# Verify matching occurred — both show empty book
-curl -s http://localhost:8080/orderbook
-curl -s http://localhost:8081/orderbook
-```
-
-### Leader Failover Test
-
-```bash
-# 1. Start two instances as above
-# 2. Note which is the leader (check logs for "Became engine leader")
-# 3. Kill the leader instance (Ctrl+C or kill the process)
-# 4. Wait ~30 seconds (leader lock TTL expires)
-# 5. The surviving instance logs "Became engine leader"
-# 6. Submit new orders — they are processed by the new leader
-
-# During the failover window:
-# - Orders are accepted by any API server (pushed to Redis queue)
-# - Orders queue up but are NOT matched until a new leader is elected
-# - No orders are lost — they wait in the Redis list
-# - After failover, queued orders are processed in FIFO order
-#
-# Known limitation: the in-memory order book is lost when the leader dies.
-# Any resting orders from before the crash are gone. In production,
-# you'd reconstruct the book from a persistent fill log.
-```
+During failover, orders queue in Redis and are **not lost**.
 
 ---
 
 ## Running Tests
 
 ```bash
-# Run all workspace tests (engine + server)
+# All tests
 cargo test --workspace
 
-# Run only the engine (matching logic) tests
+# Engine tests only
 cargo test -p engine
 
-# Run tests with output
-cargo test --workspace -- --nocapture
-
-# Run a specific test
+# Specific test
 cargo test -p engine test_price_priority
+
+# With output
+cargo test --workspace -- --nocapture
 ```
 
 ### Test Coverage
 
-The engine crate includes 9 unit tests covering:
-
-| Test | What It Verifies |
-|------|-----------------|
+| Test | Verifies |
+|------|----------|
 | `test_no_match_rests_on_book` | Sell into empty book rests on asks |
-| `test_full_match` | Exact crossing match, both orders consumed |
-| `test_partial_fill_incoming_larger` | Incoming qty > resting qty, remainder rests |
-| `test_partial_fill_resting_larger` | Incoming qty < resting qty, resting reduced |
+| `test_full_match` | Exact crossing match, both consumed |
+| `test_partial_fill_incoming_larger` | Incoming > resting, remainder rests |
+| `test_partial_fill_resting_larger` | Incoming < resting, resting reduced |
 | `test_price_priority` | Best price matched first across levels |
-| `test_time_priority` | FIFO ordering at the same price level |
-| `test_fills_sum_to_matched_qty` | Sum of fill quantities is correct |
-| `test_no_match_price_too_low` | Buy below ask, both rest on book |
-| `test_sell_matches_highest_bid_first` | Sell matches highest bid first |
+| `test_time_priority` | FIFO ordering at the same price |
+| `test_fills_sum_to_matched_qty` | Fill quantities sum correctly |
+| `test_no_match_price_too_low` | Buy below ask, both rest |
+| `test_sell_matches_highest_bid_first` | Highest bid fills first |
 
 ### Code Quality
 
 ```bash
-# Lint
 cargo clippy --all-targets -- -D warnings
-
-# Format check
 cargo fmt --all -- --check
-
-# Format (auto-fix)
-cargo fmt --all
 ```
 
 ---
@@ -476,48 +482,56 @@ cargo fmt --all
 
 ```
 matchbox/
-├── Cargo.toml                 # Workspace definition + shared dependencies
+├── Cargo.toml              # Workspace definition
 ├── Cargo.lock
 ├── README.md
-├── docker-compose.yml         # Redis service
+├── docker-compose.yml      # Redis service
 ├── .gitignore
+├── .github/
+│   └── workflows/
+│       └── docs.yml        # CI: build & deploy docs to GitHub Pages
+├── book/                   # mdBook documentation site source
+│   ├── book.toml
+│   └── src/
+├── postman/                # Postman API collection
+│   └── Matchbox.postman_collection.json
 │
-├── crates/
-│   ├── engine/                # Core matching engine library (pure Rust, no I/O)
-│   │   ├── Cargo.toml
-│   │   └── src/
-│   │       ├── lib.rs         # Public module re-exports
-│   │       ├── models.rs      # Order, Fill, Side, request/response types
-│   │       ├── book.rs        # OrderBook struct (BTreeMap + VecDeque)
-│   │       └── matcher.rs     # match_order() + price-time priority + tests
-│   │
-│   └── server/                # API server binary (Axum + Redis + WebSocket)
-│       ├── Cargo.toml
-│       └── src/
-│           ├── main.rs            # Entry point, startup sequence
-│           ├── state.rs           # AppState (Redis client, broadcast, instance ID)
-│           ├── errors.rs          # AppError enum with IntoResponse
-│           ├── engine_worker.rs   # LPOP loop + matching + leader election
-│           ├── redis_sub.rs       # Redis Pub/Sub subscriber -> broadcast
-│           └── routes/
-│               ├── mod.rs         # Router definition
-│               ├── orders.rs      # POST /orders, GET /orderbook
-│               └── ws.rs          # GET /ws WebSocket handler
+└── crates/
+    ├── engine/             # Core matching engine (pure Rust, no I/O)
+    │   ├── Cargo.toml
+    │   └── src/
+    │       ├── lib.rs          # Module re-exports
+    │       ├── models.rs       # Order, Fill, Side, request/response types
+    │       ├── book.rs         # OrderBook (BTreeMap + VecDeque)
+    │       └── matcher.rs      # match_order() + unit tests
+    │
+    └── server/             # API server binary (Axum + Redis + WS)
+        ├── Cargo.toml
+        └── src/
+            ├── main.rs             # Entry point, startup sequence
+            ├── state.rs            # AppState (Redis, broadcast, instance ID)
+            ├── errors.rs           # AppError enum
+            ├── engine_worker.rs    # LPOP loop + matching + leader election
+            ├── redis_sub.rs        # Pub/Sub subscriber -> broadcast
+            └── routes/
+                ├── mod.rs          # Router definition
+                ├── orders.rs       # POST /orders, GET /orderbook
+                └── ws.rs           # GET /ws WebSocket handler
 ```
 
 ### Module Responsibilities
 
-| Module | Responsibility | Dependencies |
-|--------|---------------|--------------|
-| `engine::models` | Domain types: Order, Fill, Side, snapshots | serde only |
-| `engine::book` | OrderBook: BTreeMap storage, add/query/snapshot | std::collections |
-| `engine::matcher` | Price-time priority matching algorithm | engine::book, engine::models |
-| `server::main` | Tokio runtime, Redis init, Axum serve, task spawning | everything |
-| `server::state` | AppState shared across all handlers | fred, tokio::sync |
-| `server::engine_worker` | Leader election + order queue consumer | engine, fred |
-| `server::redis_sub` | Redis Pub/Sub -> tokio broadcast bridge | fred, tokio::sync |
-| `server::routes::orders` | HTTP handlers for order submission and book query | state, engine::models, fred |
-| `server::routes::ws` | WebSocket upgrade and fill streaming | state, tokio::sync |
+| Module | Responsibility |
+|--------|---------------|
+| `engine::models` | Domain types: Order, Fill, Side, snapshots |
+| `engine::book` | OrderBook: BTreeMap storage, add/query/snapshot |
+| `engine::matcher` | Price-time priority matching algorithm |
+| `server::main` | Tokio runtime, Redis init, Axum serve, task spawning |
+| `server::state` | AppState shared across all handlers |
+| `server::engine_worker` | Leader election + order queue consumer |
+| `server::redis_sub` | Redis Pub/Sub -> tokio broadcast bridge |
+| `server::routes::orders` | Order submission and book query handlers |
+| `server::routes::ws` | WebSocket upgrade and fill streaming |
 
 ### Redis Key Namespace
 
@@ -525,8 +539,17 @@ matchbox/
 |-----|------|---------|-----|
 | `engine:order_id_counter` | String (int) | Monotonically increasing order ID via INCR | None |
 | `engine:order_queue` | List | FIFO queue of serialized orders (RPUSH/LPOP) | None |
-| `engine:leader` | String | Current engine leader instance ID (SET NX EX) | 30s |
-| `orderbook:snapshot` | String (JSON) | Latest order book snapshot for GET /orderbook | None |
-| `fills:events` | Pub/Sub Channel | Fill event broadcast from engine to all instances | N/A |
+| `engine:leader` | String | Engine leader instance ID (SET NX EX) | 30s |
+| `orderbook:snapshot` | String (JSON) | Latest order book snapshot | None |
+| `fills:events` | Pub/Sub | Fill event broadcast | N/A |
 
 ---
+
+<div align="center">
+
+[![Yash K. Saini](https://img.shields.io/badge/Portfolio-Visit-blue?style=flat&logo=google-chrome)](https://www.yashksaini.systems/)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Follow-blue?style=flat&logo=linkedin)](https://www.linkedin.com/in/yashksaini/)
+[![Twitter](https://img.shields.io/badge/Twitter-Follow-blue?style=flat&logo=twitter)](https://x.com/0xCracked_dev)
+[![GitHub](https://img.shields.io/badge/GitHub-Follow-black?style=flat&logo=github)](https://github.com/yashksaini-coder)
+
+</div>
