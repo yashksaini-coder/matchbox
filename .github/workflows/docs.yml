@@ -2,7 +2,11 @@ name: Deploy Docs
 
 on:
   push:
-    branches: [main]
+    branches: [master]
+    paths:
+      - 'book/**'
+  pull_request:
+    branches: [master]
     paths:
       - 'book/**'
   workflow_dispatch:
@@ -27,15 +31,20 @@ jobs:
         with:
           mdbook-version: 'latest'
 
+      - name: Install mdbook-mermaid
+        run: cargo install mdbook-mermaid
+
       - name: Build book
         run: mdbook build book
 
       - name: Upload artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: target/book
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
