@@ -6,35 +6,9 @@ A toy (but architecturally honest) order matching engine for a prediction market
 
 ---
 
-## Table of Contents
-
-- [Architecture](#architecture)
-- [Prerequisites](#prerequisites)
-- [Getting Started](#getting-started)
-  - [Option A: Manual Setup](#option-a-manual-setup)
-  - [Option B: Docker Compose](#option-b-docker-compose-full-stack)
-- [API Reference](#api-reference)
-- [Usage Examples](#usage-examples)
-  - [Submitting Orders](#submitting-orders)
-  - [Querying the Order Book](#querying-the-order-book)
-  - [Real-Time WebSocket Feed](#real-time-websocket-feed)
-  - [Partial Fill Example](#partial-fill-example)
-  - [Price Priority Example](#price-priority-example)
-- [Multi-Instance Mode](#multi-instance-mode)
-  - [Manual Multi-Instance](#manual-multi-instance)
-  - [Docker Multi-Instance](#docker-multi-instance)
-  - [Leader Failover Test](#leader-failover-test)
-- [Running Tests](#running-tests)
-- [Project Structure](#project-structure)
-- [The 4 Critical Questions](#the-4-critical-questions)
-- [What's NOT Built (by design)](#whats-not-built-by-design)
-
----
-
 ## Architecture
 
 ```
-                              CLIENTS
    Browser/CLI  <── HTTP/WS ──>  API Server A  <── HTTP/WS ──>  ...
                                      │
                                      │ RPUSH order (JSON)
