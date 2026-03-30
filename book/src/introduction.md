@@ -6,6 +6,26 @@ Matchbox is a toy (but architecturally honest) system that demonstrates how to b
 
 ## The Three Pillars
 
+```mermaid
+flowchart LR
+    subgraph P1["HTTP API"]
+        H["POST /orders<br/>GET /orderbook<br/>GET /health"]
+    end
+    subgraph P2["Matching Engine"]
+        M["Price-time priority<br/>Partial fills<br/>BTreeMap + VecDeque"]
+    end
+    subgraph P3["WebSocket Feed"]
+        W["Real-time fills<br/>Redis Pub/Sub<br/>Cross-instance fan-out"]
+    end
+
+    P1 -- "orders" --> P2
+    P2 -- "fills" --> P3
+
+    style P1 fill:#2e7d32,color:#fff
+    style P2 fill:#1565c0,color:#fff
+    style P3 fill:#f57f17,color:#fff
+```
+
 | Pillar | What It Does |
 |--------|-------------|
 | **HTTP API** | Submit orders, query the order book |

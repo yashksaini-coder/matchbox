@@ -8,13 +8,17 @@ src = "src"
 [build]
 build-dir = "../target/book"
 
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
 [output.html]
 default-theme = "navy"
 preferred-dark-theme = "navy"
-git-repository-url = "https://github.com/eterna-labs/matchbox"
-edit-url-template = "https://github.com/eterna-labs/matchbox/edit/main/book/src/{path}"
+git-repository-url = "https://github.com/yashksaini-coder/matchbox"
+edit-url-template = "https://github.com/yashksaini-coder/matchbox/edit/main/book/src/{path}"
 site-url = "/matchbox/"
 no-section-label = false
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
 
 [output.html.fold]
 enable = true

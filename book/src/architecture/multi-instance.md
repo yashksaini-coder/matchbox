@@ -41,14 +41,21 @@ This prevents a stale leader from accidentally extending a lock that another ins
 
 ## Failover
 
-```
-Timeline:
-  T=0s    Instance A acquires lock (TTL=30s)
-  T=10s   A refreshes lock → TTL reset to 30s
-  T=15s   A crashes
-  T=45s   Lock expires (30s after last refresh)
-  T=50s   Instance B acquires lock, becomes new leader
-  T=50s+  B starts processing queued orders
+```mermaid
+stateDiagram-v2
+    [*] --> TryAcquire: Instance starts
+
+    TryAcquire --> Leader: SET NX succeeds
+    TryAcquire --> Follower: SET NX fails
+
+    Leader --> Leader: Refresh lock every 10s
+    Leader --> Processing: LPOP returns order
+    Processing --> Leader: match then publish
+
+    Leader --> [*]: Crash or shutdown
+
+    Follower --> Follower: Retry every 5s
+    Follower --> TryAcquire: Lock expired after 30s
 ```
 
 During the failover window (~30s), orders queue up in Redis but are **not lost**. The new leader processes them in FIFO order.
@@ -57,11 +64,12 @@ During the failover window (~30s), orders queue up in Redis but are **not lost**
 
 ## Correctness Guarantee
 
-```
-1. All orders enter via Redis LPOP (atomic)
-2. Only one engine worker runs (leader lock)
-3. Orders processed sequentially (single task)
-4. Book modified by one writer only
-   ─────────────────────────────────
-   ∴ Each order matched exactly once
+```mermaid
+flowchart TD
+    A["All orders flow through<br/>Redis list LPOP — atomic"] --> B["Only one engine worker<br/>runs at a time — leader lock"]
+    B --> C["Orders processed<br/>sequentially — single task"]
+    C --> D["Book modified by<br/>one writer only"]
+    D --> E["Each order matched<br/>exactly once"]
+
+    style E fill:#2e7d32,color:#fff,stroke:#1b5e20,stroke-width:2px
 ```

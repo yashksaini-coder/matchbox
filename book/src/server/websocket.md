@@ -4,21 +4,19 @@ Clients connect to `GET /ws` and receive fill events in real time across all ser
 
 ## How It Works
 
-```
-Redis Pub/Sub ("fills:events")
-        │
-        ▼
-  redis_subscriber()           ← one per API instance
-        │
-        ▼
-  broadcast::Sender<String>    ← shared in AppState
-        │
-   ┌────┼────┐
-   ▼    ▼    ▼
-  rx1  rx2  rx3                ← one per WebSocket connection
-   │    │    │
-   ▼    ▼    ▼
-  WS   WS   WS
+```mermaid
+flowchart TD
+    R["Redis Pub/Sub<br/>fills:events"] --> RS["redis_subscriber<br/>one per API instance"]
+    RS --> TX["broadcast::Sender<br/>shared in AppState"]
+    TX --> RX1["rx.recv — WS Client 1"]
+    TX --> RX2["rx.recv — WS Client 2"]
+    TX --> RX3["rx.recv — WS Client 3"]
+    RX1 --> W1["WebSocket send"]
+    RX2 --> W2["WebSocket send"]
+    RX3 --> W3["WebSocket send"]
+
+    style R fill:#dc382c,color:#fff
+    style TX fill:#1565c0,color:#fff
 ```
 
 ## Server-Side Handler

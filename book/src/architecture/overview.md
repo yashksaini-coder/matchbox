@@ -4,48 +4,84 @@ Matchbox uses a **Single Writer** architecture. All API servers push orders into
 
 ## Component Diagram
 
-```
-                          CLIENTS
- Browser/CLI  ←─ HTTP/WS ─→  API Server A  ←─ HTTP/WS ─→  ...
-                                   │
-                                   │ RPUSH order
-                                   ▼
-┌──────────────────────── REDIS ────────────────────────────┐
-│  engine:order_queue (List)      fills:events (Pub/Sub)    │
-│  engine:order_id_counter        orderbook:snapshot        │
-│  engine:leader (SETNX)                                    │
-└──────────┬───────────────────────────────┬────────────────┘
-           │ LPOP                          │ SUBSCRIBE
-           ▼                               ▼
-    ENGINE WORKER                  ALL API INSTANCES
-  (single leader task)          (fan-out to WS clients)
-  • Owns OrderBook               • broadcast::Sender<Fill>
-  • Sequential matching           • Per-connection subscribe
-  • Publishes fills
+```mermaid
+graph TB
+    subgraph Clients["Clients"]
+        C1["Browser / CLI"]
+        C2["WebSocket Client"]
+    end
+
+    subgraph API["API Server Instances"]
+        A1["Server A · :8080"]
+        A2["Server B · :8081"]
+        A3["Server N · :808N"]
+    end
+
+    subgraph Redis["Redis — Coordination Layer"]
+        Q["engine:order_queue<br/>List — FIFO Order Queue"]
+        ID["engine:order_id_counter<br/>String — Atomic INCR"]
+        LOCK["engine:leader<br/>String — SETNX · TTL 30s"]
+        SNAP["orderbook:snapshot<br/>String — JSON Snapshot"]
+        PS["fills:events<br/>Pub/Sub — Fill Broadcast"]
+    end
+
+    subgraph Engine["Engine Worker — Single Leader"]
+        EW["engine_worker_loop<br/>· Owns OrderBook in memory<br/>· Sequential match_order"]
+    end
+
+    C1 -- "POST /orders" --> A1
+    C1 -- "POST /orders" --> A2
+    C1 -- "GET /orderbook" --> A3
+
+    A1 -- "INCR" --> ID
+    A1 -- "RPUSH order" --> Q
+    A2 -- "RPUSH order" --> Q
+
+    Q -- "LPOP" --> EW
+    LOCK -. "SET NX EX 30" .-> EW
+    EW -- "PUBLISH fill" --> PS
+    EW -- "SET snapshot" --> SNAP
+
+    PS -- "SUBSCRIBE" --> A1
+    PS -- "SUBSCRIBE" --> A2
+    PS -- "SUBSCRIBE" --> A3
+
+    A1 -- "WS fill" --> C2
+    A2 -- "WS fill" --> C2
+    SNAP -- "GET" --> A3
+
+    style Redis fill:#dc382c,color:#fff,stroke:#b71c1c
+    style Engine fill:#1565c0,color:#fff,stroke:#0d47a1
+    style API fill:#2e7d32,color:#fff,stroke:#1b5e20
+    style Clients fill:#f57f17,color:#fff,stroke:#e65100
 ```
 
 ## Order Lifecycle
 
-An order travels through these stages:
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as API Server
+    participant R as Redis
+    participant E as Engine Worker
+    participant W as WebSocket Clients
 
-```
-Client POST /orders
-    → Axum handler validates input
-    → Redis INCR for unique order ID
-    → Redis RPUSH to engine:order_queue
-    → 201 Created returned to client
+    C->>A: POST /orders {side, price, qty}
+    A->>R: INCR engine:order_id_counter
+    R-->>A: order_id = 42
+    A->>R: RPUSH engine:order_queue
+    A-->>C: 201 Created {order_id: 42}
 
-Engine Worker (async)
-    → Redis LPOP from queue
-    → Deserialize Order
-    → match_order(order, &mut book)
-    → Publish fills to Redis Pub/Sub
-    → Update orderbook:snapshot in Redis
+    Note over E: Polling queue via LPOP
 
-All API Instances
-    → Redis SUBSCRIBE fills:events
-    → tokio::sync::broadcast to local WS clients
-    → Each WebSocket connection receives the fill
+    R->>E: LPOP returns Order JSON
+    E->>E: match_order(order, book)
+    E->>R: PUBLISH fills:events
+    E->>R: SET orderbook:snapshot
+
+    R->>A: SUBSCRIBE message
+    A->>A: broadcast::send(fill)
+    A->>W: WebSocket Text(fill JSON)
 ```
 
 ## Why Single Writer?

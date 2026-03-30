@@ -53,18 +53,58 @@ while incoming.qty > 0 {
 
 The sell-side (`match_sell`) is symmetric — matches against highest bids first.
 
+## Price Priority in Action
+
+```mermaid
+flowchart LR
+    subgraph Input
+        O["Incoming Order<br/>Buy 25 @ 510"]
+    end
+
+    subgraph Book["Order Book — asks side"]
+        L1["490: Sell qty=10"]
+        L2["500: Sell qty=10"]
+        L3["510: Sell qty=10"]
+    end
+
+    subgraph Output["Generated Fills"]
+        F1["Fill price=490 qty=10"]
+        F2["Fill price=500 qty=10"]
+        F3["Fill price=510 qty=5"]
+    end
+
+    O --> L1
+    L1 --> F1
+    O --> L2
+    L2 --> F2
+    O --> L3
+    L3 --> F3
+
+    F3 -. "5 remaining" .-> L3
+
+    style Input fill:#1565c0,color:#fff
+    style Output fill:#2e7d32,color:#fff
+```
+
 ## Partial Fills
 
 When an incoming order is larger than available liquidity:
 
-```
-Incoming: Buy 60 @ price 100
-Resting:  Sell 30 @ 100, Sell 50 @ 100
+```mermaid
+sequenceDiagram
+    participant I as Incoming Buy 60@100
+    participant B as Book asks at 100
+    participant F as Fills
 
-→ Fill 1: qty=30 (first sell fully consumed)
-→ Fill 2: qty=30 (second sell partially consumed, 20 remains)
-→ Incoming fully consumed (30+30=60)
-→ Book: asks = { 100: [Sell qty=20] }
+    Note over B: [Sell qty=30, Sell qty=50]
+
+    I->>B: Match first sell (qty=30)
+    B->>F: Fill qty=30 (sell fully consumed)
+    I->>B: Match second sell (30 of 50)
+    B->>F: Fill qty=30 (sell partially consumed)
+
+    Note over I: Fully consumed (30+30=60)
+    Note over B: [Sell qty=20] remaining
 ```
 
 ## Test Coverage
