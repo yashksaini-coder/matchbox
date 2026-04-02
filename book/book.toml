@@ -1,7 +1,7 @@
 [book]
 title = "Matchbox"
 description = "Prediction market order matching engine built in Rust"
-authors = ["Eterna Labs"]
+authors = ["yashksaini-coder"]
 language = "en"
 src = "src"
 
